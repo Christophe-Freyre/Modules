@@ -1,0 +1,158 @@
+function handles = MeasureNeighbourhoodIntensity2(handles)
+
+% Help for the MeasureNeighourhoodIntensity:
+% Category: Object Processing
+%
+% SHORT DESCRIPTION:
+%   Christophe Freyre
+% 
+% Expand gradually  by a precise pixel distance a given object (ObjectName).
+% The range (example: [1:10]) has to be provided by the user.
+% This module then measure the integrated intensity in the given mask and
+% give the results for every pixel distance.
+% 
+% *************************************************************************
+% 
+% The CP module requires 3 parameters:
+%  1. What objects should be gradually expanded
+%  2. List the distances in pixels to expand object.e.g. [1 5 10]
+%  3. Select image to be measured. 
+% 
+% 1. The objects which are gradually going to be expanded such as LDs.
+% Note: The Objects should be first identified and segmented using
+% IdentifyPrimAutomatic.m. The segmetned objects should be jointed and 
+% related to their parents objects (i.e. cells) prior to use this module. 
+% One can use RelateAndJoinSegmentation.m to achieve this.
+% The expansion uses bwdist function which is much better at expanding
+% objects and does not rely on a filter (square matrix operation) like in
+% bwmorph. See the documentation and the different parameters for bwmorph
+% such as 'thicken' or 'dilate'.
+% 
+% 2. List the distances.
+% The distances should be provided between brackets i.e. [1 2], for example
+% to measure with an expanded mask of 1 pixel and 2 pixels.
+% Alternatively, one can give a range of distances such as [1:30] which
+% will measure from 1 to 30 pixels in distance.
+% The eval function allows to convert the given range in a matrix format
+% which can be handeled by Matlab.
+%
+% 3. Select the image which should be measured
+% Select the image where the signal should be measure.
+% This module measure integrated intensity of the given channel inside the
+% mask
+%
+% *************************************************************************
+% Websites:
+% http://www.imls.uzh.ch/research/klemm.html
+% https://www.pelkmanslab.org/
+% http://www.cellprofiler.org
+% 
+% Authors:
+%   Christophe Freyre
+%   Nico Battich
+%   02.03.2016
+%
+% $Revision: 1725 $
+
+%%%%%%%%%%%%%%%%%
+%%% VARIABLES %%%
+%%%%%%%%%%%%%%%%%
+drawnow
+
+[CurrentModule, CurrentModuleNum, ModuleName] = CPwhichmodule(handles);
+
+%textVAR01 = What objects should be gradually expanded ?
+%infotypeVAR01 = objectgroup
+%inputtypeVAR01 = popupmenu
+ObjectName = char(handles.Settings.VariableValues{CurrentModuleNum,1});
+
+%textVAR02 = List the distances in pixels to expand object e.g. [1 5 10]
+%defaultVAR02 = [1 2 3 4 5 6 7 8 9 10]
+DistanceRange = eval(handles.Settings.VariableValues{CurrentModuleNum,2});
+
+%textVAR03 = Select image to be measured.
+%infotypeVAR03 = imagegroup
+%inputtypeVAR03 = popupmenu
+ImageName = char(handles.Settings.VariableValues{CurrentModuleNum,3});
+
+%textVAR04 = Select object to serve as boundary e.g. cells
+%infotypeVAR04 = objectgroup
+%inputtypeVAR04 = popupmenu
+BoundaryObjectName = char(handles.Settings.VariableValues{CurrentModuleNum,4});
+
+
+
+
+
+%%%VariableRevisionNumber = 1
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% PRELIMINARY CALCULATIONS & FILE HANDLING %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+drawnow
+
+
+CurrentSegmentedImage = CPretrieveimage(handles,['Segmented' ObjectName],ModuleName,'MustBeGray','DontCheckScale');
+OrigImage = CPretrieveimage(handles,ImageName,ModuleName,'MustBeGray','CheckScale');
+ObejectsIds = unique(CurrentSegmentedImage(:)); ObejectsIds(ObejectsIds==0)=[];
+CurrentBoundaryImage = CPretrieveimage(handles,['Segmented' BoundaryObjectName],ModuleName,'MustBeGray','DontCheckScale');
+
+% Find Centroids
+Centroids = regionprops(CurrentSegmentedImage,'Centroid');
+Centroids = round(cat(1,Centroids(:).Centroid));
+% Centroid matrix contain the x y and coordinates of the center of the
+% centroid. One has to convert this x y into a different index using
+% sub2ind.
+Centroids = sub2ind(size(CurrentSegmentedImage),Centroids(:,2),Centroids(:,1));
+%Is not it the opposite ? Centroids(:,1), Centroids(:,2) ?
+
+CellIdOfObject = CurrentBoundaryImage(Centroids);
+CellIdOfObject = [0;CellIdOfObject];
+%I don't understand this step, what is it for ?
+if ~isempty(ObejectsIds)
+    
+    Results = nan(length(ObejectsIds),length(DistanceRange));
+    
+    for i=1:length(DistanceRange)
+        
+        currentDistance=DistanceRange(i);
+        %Expand individual objects
+        MaxNumberOfObjects = max(CurrentSegmentedImage(:));
+        NewExpandedSegmentation = zeros(size(CurrentSegmentedImage));
+        for j=1:MaxNumberOfObjects
+        CurrentSegmentedImagewithIndividualObjects = CurrentSegmentedImage;
+        CurrentSegmentedImagewithIndividualObjects(CurrentSegmentedImagewithIndividualObjects ~=j) = 0;
+        [CurrentObjNhood,CurrentObjLabels] = bwdist(CurrentSegmentedImagewithIndividualObjects);
+        CurrentExpandedSegmentation = double(CurrentObjNhood < currentDistance).*CurrentSegmentedImagewithIndividualObjects(CurrentObjLabels);
+        FilterImage = CurrentExpandedSegmentation+1;
+        FilterImage(:) = CellIdOfObject(FilterImage(:));
+        FilterImage = FilterImage~=CurrentBoundaryImage;
+        CurrentExpandedSegmentation(FilterImage) = 0;
+        NewExpandedSegmentation= NewExpandedSegmentation+CurrentExpandedSegmentation;
+        %Here the pixels which are not in the current boundary object are
+        %considered as equal to zeros.
+        end
+        IntensityValues = regionprops(CurrentExpandedSegmentation,OrigImage,'PixelValues' );
+        IntensityValues = arrayfun(@(a) sum(IntensityValues(a).PixelValues),ObejectsIds);
+        % arrayfun applies a function to each element of the array. @
+        % allows to define a function on the fly.
+        Results(:,i) = IntensityValues;
+        
+    end
+else
+    Results = zeros(1,length(DistanceRange));
+end
+
+strFeautes = arrayfun(@(a) sprintf('IntensityAt_%.3dPixels',a),DistanceRange,'uniformoutput',false);
+% The %.3d allows to create a number for every integer of Distance Range.
+% Can have a maximal of 999 (restricted by the 3 numbers starting by 000,
+% then 001, etc).
+%
+%%% save the features names
+if handles.Current.SetBeingAnalyzed==1
+    handles.Measurements.(ObjectName).NeighbourhoodIntensityFeatures = strFeautes;
+    handles.Measurements.(ObjectName).NeighbourhoodIntensity = cell(1,handles.Current.NumberOfImageSets);
+end
+
+%%% save measurements
+handles.Measurements.(ObjectName).NeighbourhoodIntensity{handles.Current.SetBeingAnalyzed} = Results;
